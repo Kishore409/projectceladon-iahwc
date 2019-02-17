@@ -78,8 +78,7 @@ bool DrmDisplay::InitializeDisplay() {
   return true;
 }
 
-std::vector<uint8_t *> DrmDisplay::FindExtendedBlocksForTag(uint8_t *edid,
-                                                            uint8_t block_tag) {
+void DrmDisplay::ParseCTAFromExtensionBlock(uint8_t *edid) {
   int current_block;
   uint8_t *cta_ext_blk;
   uint8_t dblen;
@@ -88,11 +87,10 @@ std::vector<uint8_t *> DrmDisplay::FindExtendedBlocksForTag(uint8_t *edid,
   uint8_t *cta_db_end;
   uint8_t *dbptr;
   uint8_t tag;
-  std::vector<uint8_t *> addrs;
 
   int num_blocks = edid[126];
   if (!num_blocks) {
-    return addrs;
+    return;
   }
 
   for (current_block = 1; current_block <= num_blocks; current_block++) {
@@ -108,50 +106,25 @@ std::vector<uint8_t *> DrmDisplay::FindExtendedBlocksForTag(uint8_t *edid,
       dblen = dbptr[0] & 0x1F;
 
       // Check if the extension has an extended block
-      if (tag == block_tag)
-        addrs.emplace_back(dbptr);
+      if (tag == CTA_EXTENDED_TAG_CODE) {
+        switch (dbptr[1]) {
+          case CTA_COLORIMETRY_CODE:
+            ITRACE(" Colorimetry Data block\n");
+            DrmConnectorGetDCIP3Support(dbptr + 2, dblen - 1);
+            break;
+          default:
+            ITRACE(" Unknown tag/Parsing option\n");
+        }
+      }
     }
   }
-
-  return addrs;
 }
 
-void DrmDisplay::DrmConnectorGetDCIP3Support(
-    const ScopedDrmObjectPropertyPtr &props) {
-  uint8_t *edid = NULL;
-  uint64_t edid_blob_id;
-  drmModePropertyBlobPtr blob;
-  uint8_t block_tag;
-  std::vector<uint8_t *> blocks;
-
+void DrmDisplay::DrmConnectorGetDCIP3Support(uint8_t *b, uint8_t length) {
   dcip3_ = false;
-
-  GetDrmObjectPropertyValue("EDID", props, &edid_blob_id);
-  blob = drmModeGetPropertyBlob(gpu_fd_, edid_blob_id);
-  if (!blob) {
-    return;
+  if (length >= 2) {
+    dcip3_ = !!(b[1] & 0x80);
   }
-
-  edid = (uint8_t *)blob->data;
-  if (!edid) {
-    drmModeFreePropertyBlob(blob);
-    return;
-  }
-
-  blocks = FindExtendedBlocksForTag(edid, CTA_EXTENDED_TAG_CODE);
-
-  for (uint8_t *ext_block : blocks) {
-    block_tag = ext_block[1];
-
-    if (block_tag == CTA_COLORIMETRY_CODE) {
-      dcip3_ = !!(ext_block[3] & 0x80);
-      if (dcip3_)
-        break;
-    }
-  }
-
-  drmModeFreePropertyBlob(blob);
-
   return;
 }
 
@@ -223,7 +196,19 @@ bool DrmDisplay::ConnectDisplay(const drmModeModeInfo &mode_info,
   GetDrmObjectProperty("DPMS", connector_props, &dpms_prop_);
   GetDrmObjectProperty("max bpc", connector_props, &max_bpc_prop_);
 
-  DrmConnectorGetDCIP3Support(connector_props);
+  uint8_t *edid = NULL;
+  uint64_t edid_blob_id;
+  drmModePropertyBlobPtr blob;
+
+  GetDrmObjectPropertyValue("EDID", connector_props, &edid_blob_id);
+  blob = drmModeGetPropertyBlob(gpu_fd_, edid_blob_id);
+  if (blob == nullptr || blob->data == nullptr) {
+    ETRACE("Failed to get EDID blob data\n");
+    return false;
+  }
+
+  edid = (uint8_t *)blob->data;
+  ParseCTAFromExtensionBlock(edid);
   if (dcip3_) {
     ITRACE("DCIP3 support available");
     if (!SetPipeMaxBpc(PIPE_BPC_TWELVE))
@@ -232,6 +217,7 @@ bool DrmDisplay::ConnectDisplay(const drmModeModeInfo &mode_info,
     ITRACE("DCIP3 support not available");
   }
 
+  drmModeFreePropertyBlob(blob);
   PhysicalDisplay::Connect();
   SetHDCPState(desired_protection_support_, content_type_);
 

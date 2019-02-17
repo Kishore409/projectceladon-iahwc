@@ -164,7 +164,8 @@ class DrmDisplay : public PhysicalDisplay {
                                         uint32_t possible_crtcs);
   std::vector<uint8_t *> FindExtendedBlocksForTag(uint8_t *edid,
                                                   uint8_t block_tag);
-  void DrmConnectorGetDCIP3Support(const ScopedDrmObjectPropertyPtr &props);
+  void ParseCTAFromExtensionBlock(uint8_t *edid);
+  void DrmConnectorGetDCIP3Support(uint8_t *b, uint8_t length);
 
   void TraceFirstCommit();
 
