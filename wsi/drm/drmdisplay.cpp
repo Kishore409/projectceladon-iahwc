@@ -36,8 +36,9 @@
 #include "wsi_utils.h"
 
 #define CTA_EXTENSION_TAG 0x02
-#define CTA_EXTENDED_TAG_CODE 0x07
 #define CTA_COLORIMETRY_CODE 0x05
+#define CTA_HDR_STATIC_METADATA 0x06
+#define CTA_EXTENDED_TAG_CODE 0x07
 
 namespace hwcomposer {
 
@@ -78,6 +79,111 @@ bool DrmDisplay::InitializeDisplay() {
   return true;
 }
 
+void DrmDisplay::DrmConnectorGetDCIP3Support(uint8_t *b, uint8_t length) {
+  dcip3_ = false;
+  if (b && length >= 2) {
+    dcip3_ = !!(b[1] & 0x80);
+    clrspaces = ((!!(b[1] & 0x80)) << 8) | (b[0]);
+  }
+  return;
+}
+
+uint16_t DrmDisplay::DrmConnectorColorPrimary(short val) {
+  short temp = val & 0x3FF;
+  short count = 1;
+  float result = 0;
+  uint16_t output;
+
+  /* Primary values in EDID are ecoded in 10 bit format, where every bit
+   * represents 2 pow negative bit position, ex 0.500 = 1/2 = 2 ^ -1 = (1 << 9)
+   */
+  while (temp) {
+    result += ((!!(temp & (1 << 9))) * pow(2, -count));
+    count++;
+    temp <<= 1;
+  }
+
+  /* Primaries are to represented in uint16 format, in power of 0.00002,
+   *     * max allowed value is 500,00 */
+  output = result * 50000;
+  if (output > 50000)
+    output = 50000;
+
+  return output;
+}
+
+void DrmDisplay::DrmConnectorGetHDRStaticMetadata(uint8_t *b, uint8_t length) {
+  uint8_t i;
+
+  if (length < 2) {
+    ITRACE("Invalid metadata input to static parser\n");
+    return;
+  }
+
+  display_hdrMd = (struct drm_edid_hdr_metadata_static *)malloc(
+      sizeof(struct drm_edid_hdr_metadata_static));
+  if (!display_hdrMd) {
+    ITRACE("OOM while parsing static metadata\n");
+    return;
+  }
+  memset(display_hdrMd, 0, sizeof(struct drm_edid_hdr_metadata_static));
+
+  display_hdrMd->eotf = b[0] & 0x3F;
+  display_hdrMd->metadata_type = b[1];
+
+  if (length > 2 && length < 6) {
+    display_hdrMd->desired_max_ll = b[2];
+    display_hdrMd->desired_max_fall = b[3];
+    display_hdrMd->desired_min_ll = b[4];
+
+    if (!display_hdrMd->desired_max_ll)
+      display_hdrMd->desired_max_ll = 0xFF;
+  }
+  return;
+}
+
+#define HIGH_X(val) (val >> 6)
+#define HIGH_Y(val) ((val >> 4) & 0x3)
+#define LOW_X(val) ((val >> 2) & 0x3)
+#define LOW_Y(val) ((val >> 4) & 0x3)
+
+void DrmDisplay::DrmConnectorGetcolorPrimaries(
+    uint8_t *b, struct drm_display_color_primaries *p) {
+  uint8_t rxrygxgy_0_1;
+  uint8_t bxbywxwy_0_1;
+  uint8_t count = 0x19; /* base of chromaticity block values */
+  uint16_t val;
+
+  if (!b || !p)
+    return;
+
+  rxrygxgy_0_1 = b[count++];
+  bxbywxwy_0_1 = b[count++];
+
+  val = (b[count++] << 2) | HIGH_X(rxrygxgy_0_1);
+  p->display_primary_r_x = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | HIGH_Y(rxrygxgy_0_1);
+  p->display_primary_r_y = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | LOW_X(rxrygxgy_0_1);
+  p->display_primary_g_x = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | LOW_Y(rxrygxgy_0_1);
+  p->display_primary_g_y = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | HIGH_X(bxbywxwy_0_1);
+  p->display_primary_b_x = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | HIGH_Y(bxbywxwy_0_1);
+  p->display_primary_b_y = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | LOW_X(bxbywxwy_0_1);
+  p->white_point_x = DrmConnectorColorPrimary(val);
+
+  val = (b[count++] << 2) | LOW_X(bxbywxwy_0_1);
+  p->white_point_y = DrmConnectorColorPrimary(val);
+}
 void DrmDisplay::ParseCTAFromExtensionBlock(uint8_t *edid) {
   int current_block;
   uint8_t *cta_ext_blk;
@@ -112,20 +218,17 @@ void DrmDisplay::ParseCTAFromExtensionBlock(uint8_t *edid) {
             ITRACE(" Colorimetry Data block\n");
             DrmConnectorGetDCIP3Support(dbptr + 2, dblen - 1);
             break;
+          case CTA_HDR_STATIC_METADATA:
+            ITRACE(" HDR STATICMETADATA block\n");
+            DrmConnectorGetHDRStaticMetadata(dbptr + 2, dblen - 1);
+            break;
           default:
             ITRACE(" Unknown tag/Parsing option\n");
         }
+        DrmConnectorGetcolorPrimaries(dbptr + 2, &primaries);
       }
     }
   }
-}
-
-void DrmDisplay::DrmConnectorGetDCIP3Support(uint8_t *b, uint8_t length) {
-  dcip3_ = false;
-  if (length >= 2) {
-    dcip3_ = !!(b[1] & 0x80);
-  }
-  return;
 }
 
 bool DrmDisplay::ConnectDisplay(const drmModeModeInfo &mode_info,

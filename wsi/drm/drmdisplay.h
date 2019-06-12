@@ -42,6 +42,44 @@ enum pipe_bpc {
   PIPE_BPC_SIXTEEN = 16
 };
 
+/* CTA-861-G: HDR Metadata names and types */
+enum drm_hdr_eotf_type {
+  DRM_EOTF_SDR_TRADITIONAL = 0,
+  DRM_EOTF_HDR_TRADITIONAL,
+  DRM_EOTF_HDR_ST2084,
+  DRM_EOTF_HLG_BT2100,
+  DRM_EOTF_MAX
+};
+
+enum drm_colorspace {
+  DRM_COLORSPACE_INVALID,
+  DRM_COLORSPACE_REC709,
+  DRM_COLORSPACE_DCIP3,
+  DRM_COLORSPACE_REC2020,
+  DRM_COLORSPACE_MAX,
+};
+
+/* Monitors HDR Metadata */
+struct drm_edid_hdr_metadata_static {
+  uint8_t eotf;
+  uint8_t metadata_type;
+  uint8_t desired_max_ll;
+  uint8_t desired_max_fall;
+  uint8_t desired_min_ll;
+};
+
+/* Monitor's color primaries */
+struct drm_display_color_primaries {
+  uint16_t display_primary_r_x;
+  uint16_t display_primary_r_y;
+  uint16_t display_primary_g_x;
+  uint16_t display_primary_g_y;
+  uint16_t display_primary_b_x;
+  uint16_t display_primary_b_y;
+  uint16_t white_point_x;
+  uint16_t white_point_y;
+};
+
 class DrmDisplayManager;
 class DisplayPlaneState;
 class DisplayQueue;
@@ -166,7 +204,10 @@ class DrmDisplay : public PhysicalDisplay {
                                                   uint8_t block_tag);
   void ParseCTAFromExtensionBlock(uint8_t *edid);
   void DrmConnectorGetDCIP3Support(uint8_t *b, uint8_t length);
-
+  void DrmConnectorGetHDRStaticMetadata(uint8_t *b, uint8_t length);
+  uint16_t DrmConnectorColorPrimary(short val);
+  void DrmConnectorGetcolorPrimaries(
+      uint8_t *b, struct drm_display_color_primaries *primaries);
   void TraceFirstCommit();
 
   uint32_t FindPreferedDisplayMode(size_t modes_size);
@@ -201,7 +242,15 @@ class DrmDisplay : public PhysicalDisplay {
   bool first_commit_ = false;
   uint32_t prefer_display_mode_ = 0;
   uint32_t perf_display_mode_ = 0;
-  std::string display_name_ = "";
+  std::string display_name_;
+
+  /* Display's static HDR metadata */
+  struct drm_edid_hdr_metadata_static *display_hdrMd;
+  /* Display's color primaries */
+  struct drm_display_color_primaries primaries;
+  /* Display's supported color spaces */
+  uint32_t clrspaces;
+
   HWCContentProtection current_protection_support_ =
       HWCContentProtection::kUnSupported;
   HWCContentProtection desired_protection_support_ =
