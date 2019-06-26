@@ -298,6 +298,9 @@ bool DrmDisplay::ConnectDisplay(const drmModeModeInfo &mode_info,
   GetDrmObjectProperty("Broadcast RGB", connector_props, &broadcastrgb_id_);
   GetDrmObjectProperty("DPMS", connector_props, &dpms_prop_);
   GetDrmObjectProperty("max bpc", connector_props, &max_bpc_prop_);
+  GetDrmObjectProperty("HDR_OUTPUT_METADATA", connector_props,
+                       &hdr_op_metadata_prop_);
+  GetDrmObjectProperty("Colorspace", connector_props, &colorspace_op_prop_);
 
   uint8_t *edid = NULL;
   uint64_t edid_blob_id;
@@ -1151,6 +1154,19 @@ void DrmDisplay::SetColorCorrection(struct gamma_colors gamma,
   free(lut);
 }
 
+/* Return the colorspace values to be going to AVI infoframe */
+static inline uint32_t to_kernel_colorspace(uint8_t colorspace) {
+  switch (colorspace) {
+    case DRM_COLORSPACE_DCIP3:
+      return DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65;
+    case DRM_COLORSPACE_REC2020:
+      return DRM_MODE_COLORIMETRY_BT2020_RGB;
+    case DRM_COLORSPACE_REC709:
+    default:
+      return DRM_MODE_COLORIMETRY_DEFAULT;
+  }
+}
+
 bool DrmDisplay::ApplyPendingModeset(drmModeAtomicReqPtr property_set) {
   if (old_blob_id_) {
     drmModeDestroyPropertyBlob(gpu_fd_, old_blob_id_);
@@ -1170,6 +1186,7 @@ bool DrmDisplay::ApplyPendingModeset(drmModeAtomicReqPtr property_set) {
                                      crtc_id_) < 0 ||
             drmModeAtomicAddProperty(property_set, crtc_id_, active_prop_,
                                      active) < 0;
+
   if (ret) {
     ETRACE("Failed to add blob %d to pset", blob_id_);
     return false;
