@@ -42,6 +42,7 @@
 
 #include <nativebufferhandler.h>
 #include "commondrmutils.h"
+#include "hdr_metadata_defs.h"
 #include "platformcommondefines.h"
 
 #define NUM_BUFFERS 1
@@ -631,6 +632,11 @@ int main(int argc, char *argv[]) {
   buffer->dev->unmap_bo(buffer);
 
   copy_buffer_to_handle(&native_handle, buffer);
+
+  layer.SetColorSpace(CS_BT2020);
+  layer.SetHdrMetadata(6550, 2300, 8500, 39850, 35400, 14600, 15635, 16450,
+                       1000, 100, 4000, 100);
+  layer.SetHdrEotf(EOTF_ST2084);
 
   layer.SetAcquireFence(-1);
   std::vector<hwcomposer::HwcRect<int>> damage_region;
