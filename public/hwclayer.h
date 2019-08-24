@@ -283,6 +283,14 @@ struct HwcLayer {
     return solid_color_;
   }
 
+  uint32_t GetColorSpace() {
+    return colorspace;
+  }
+
+  struct hdr_metadata GetHdrMetadata() {
+    return hdr_mdata;
+  }
+
   bool HasZorderChanged() const {
     return state_ & kZorderChanged;
   }
@@ -382,7 +390,7 @@ struct HwcLayer {
   uint32_t solid_color_ = 0xff;
 
   struct hdr_metadata hdr_mdata;
-  int colorspace;
+  uint32_t colorspace;
 
   HWCLayerCompositionType composition_type_ = Composition_Device;
 };
