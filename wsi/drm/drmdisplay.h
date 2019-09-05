@@ -24,6 +24,7 @@
 #include <drmscopedtypes.h>
 
 #include "drmplane.h"
+#include "hdr_metadata_defs.h"
 #include "physicaldisplay.h"
 
 #ifndef DRM_RGBA8888
@@ -232,6 +233,12 @@ class DrmDisplay : public PhysicalDisplay {
                        struct drm_color_ctm_post_offset *ctm_post_offset) const;
   void ApplyPendingLUT(struct drm_color_lut *lut) const;
   bool ApplyPendingModeset(drmModeAtomicReqPtr property_set);
+  bool ApplyPendingHdr(drmModeAtomicReqPtr property_set,
+                       struct drm_conn_color_state *target);
+  void Accumulated_HdrMetadata(struct hdr_metadata *hdr_mdata1,
+                               struct hdr_metadata *hdr_mdata2);
+  void PrepareHdrMetadata(struct hdr_metadata *l_hdr_mdata,
+                          struct drm_hdr_metadata *out_metadata);
   bool GetFence(drmModeAtomicReqPtr property_set, int32_t *out_fence);
   bool CommitFrame(const DisplayPlaneStateList &comp_planes,
                    const DisplayPlaneStateList &previous_composition_planes,

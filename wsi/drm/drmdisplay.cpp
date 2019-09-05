@@ -15,6 +15,7 @@
 */
 
 #include "drmdisplay.h"
+#include "hdr_metadata_defs.h"
 
 #include <sys/time.h>
 #include <cmath>
@@ -656,11 +657,89 @@ void DrmDisplay::TraceFirstCommit() {
   ITRACE("First frame is Committed at %lld.", milliseconds);
 }
 
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define MIN_IF_NT_ZERO(c, d) (c ? MIN(c, d) : d)
+
+void DrmDisplay::Accumulated_HdrMetadata(struct hdr_metadata *hdr_mdata1,
+                                         struct hdr_metadata *hdr_mdata2) {
+  struct hdr_metadata_static *l1_md = &hdr_mdata1->metadata.static_metadata;
+  struct hdr_metadata_static *l2_md = &hdr_mdata2->metadata.static_metadata;
+
+  hdr_mdata1->metadata_type =
+      MIN_IF_NT_ZERO(hdr_mdata1->metadata_type, hdr_mdata2->metadata_type);
+  l1_md->primaries.r.x =
+      MIN_IF_NT_ZERO(l1_md->primaries.r.x, l2_md->primaries.r.x);
+  l1_md->primaries.r.y =
+      MIN_IF_NT_ZERO(l1_md->primaries.r.y, l2_md->primaries.r.y);
+  l1_md->primaries.g.x =
+      MIN_IF_NT_ZERO(l1_md->primaries.g.x, l2_md->primaries.g.x);
+  l1_md->primaries.g.y =
+      MIN_IF_NT_ZERO(l1_md->primaries.g.y, l2_md->primaries.g.y);
+  l1_md->primaries.b.x =
+      MIN_IF_NT_ZERO(l1_md->primaries.b.x, l2_md->primaries.b.x);
+  l1_md->primaries.b.y =
+      MIN_IF_NT_ZERO(l1_md->primaries.b.y, l2_md->primaries.b.y);
+  l1_md->primaries.white_point.x = MIN_IF_NT_ZERO(
+      l1_md->primaries.white_point.x, l2_md->primaries.white_point.x);
+  l1_md->primaries.white_point.y = MIN_IF_NT_ZERO(
+      l1_md->primaries.white_point.y, l2_md->primaries.white_point.y);
+  l1_md->max_luminance =
+      MIN_IF_NT_ZERO(l1_md->max_luminance, l2_md->max_luminance);
+  l1_md->min_luminance =
+      MIN_IF_NT_ZERO(l1_md->min_luminance, l2_md->min_luminance);
+  l1_md->max_cll = MIN_IF_NT_ZERO(l1_md->max_cll, l2_md->max_cll);
+  l1_md->max_fall = MIN_IF_NT_ZERO(l1_md->max_fall, l2_md->max_fall);
+  l1_md->eotf = MIN_IF_NT_ZERO(l1_md->eotf, l2_md->eotf);
+}
+
+void DrmDisplay::PrepareHdrMetadata(struct hdr_metadata *l_hdr_mdata,
+                                    struct drm_hdr_metadata *out_md) {
+  struct hdr_metadata_static *l_md = &l_hdr_mdata->metadata.static_metadata;
+  struct drm_hdr_metadata_static *out_static_md =
+      &out_md->drm_hdr_static_metadata;
+
+  out_static_md->max_cll = l_md->max_cll;
+  out_static_md->max_fall = l_md->max_fall;
+  out_static_md->max_mastering_luminance = l_md->max_luminance;
+  out_static_md->min_mastering_luminance = l_md->min_luminance;
+  out_static_md->primaries[0].x =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.r.x),
+                     primaries.display_primary_r_x);
+  out_static_md->primaries[0].y =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.r.y),
+                     primaries.display_primary_r_y);
+  out_static_md->primaries[1].x =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.g.x),
+                     primaries.display_primary_g_x);
+  out_static_md->primaries[1].y =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.g.y),
+                     primaries.display_primary_g_y);
+  out_static_md->primaries[2].x =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.g.x),
+                     primaries.display_primary_b_x);
+  out_static_md->primaries[2].y =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.g.y),
+                     primaries.display_primary_b_y);
+  out_static_md->white_point.x =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.white_point.x),
+                     primaries.white_point_x);
+  out_static_md->white_point.y =
+      MIN_IF_NT_ZERO(DrmConnectorColorPrimary(l_md->primaries.white_point.y),
+                     primaries.white_point_y);
+  out_static_md->eotf = DRM_EOTF_HDR_ST2084;
+  out_static_md->metadata_type = 1;
+}
+
 bool DrmDisplay::Commit(
     const DisplayPlaneStateList &composition_planes,
     const DisplayPlaneStateList &previous_composition_planes,
     bool disable_explicit_fence, int32_t previous_fence, int32_t *commit_fence,
     bool *previous_fence_released) {
+  struct hdr_metadata final_hdr_metadata, layer_metadata;
+  int layer_colorspace;
+
+  memset(&final_hdr_metadata, 0, sizeof(struct hdr_metadata));
+
   if (!manager_->IsDrmMaster()) {
     ETRACE("Failed to commit without DrmMaster");
     return true;
@@ -679,10 +758,29 @@ bool DrmDisplay::Commit(
     display_queue_->ResetPlanes(pset.get());
 
   if (display_state_ & kNeedsModeset) {
+    /* KK: Put to check only if input layer is a hdr */
+    for (const DisplayPlaneState &comp_plane : composition_planes) {
+      OverlayLayer *layer = (OverlayLayer *)comp_plane.GetOverlayLayer();
+      layer_metadata = layer->GetHdrMetadata();
+      layer_colorspace = layer->GetColorSpace();
+
+      Accumulated_HdrMetadata(&final_hdr_metadata, &layer_metadata);
+    }
+
+    PrepareHdrMetadata(&final_hdr_metadata, &color_state.o_md);
+
+    /*KK: end */
+
     if (!ApplyPendingModeset(pset.get())) {
       ETRACE("Failed to Modeset.");
       return false;
     }
+
+    if (!ApplyPendingHdr(pset.get(), &color_state)) {
+      ETRACE("Failed updating Hdr prop.");
+      return false;
+    }
+
   } else if (!disable_explicit_fence && out_fence_ptr_prop_) {
     GetFence(pset.get(), commit_fence);
   }
@@ -1194,6 +1292,28 @@ bool DrmDisplay::ApplyPendingModeset(drmModeAtomicReqPtr property_set) {
 
   old_blob_id_ = blob_id_;
   blob_id_ = 0;
+
+  return true;
+}
+
+bool DrmDisplay::ApplyPendingHdr(drmModeAtomicReqPtr property_set,
+                                 struct drm_conn_color_state *target) {
+  /* KK : TODO: set old_blob */
+  drmModeCreatePropertyBlob(gpu_fd_, (void *)&target->o_md,
+                            sizeof(target->o_md),
+                            (uint32_t *)&target->hdr_md_blob_id);
+  if (target->hdr_md_blob_id == 0)
+    return false;
+
+  int ret =
+      drmModeAtomicAddProperty(property_set, connector_, hdr_op_metadata_prop_,
+                               target->hdr_md_blob_id) < 0 ||
+      drmModeAtomicAddProperty(property_set, connector_, colorspace_op_prop_,
+                               to_kernel_colorspace(color_state.o_cs)) < 0;
+  if (ret) {
+    ETRACE("Failed to add blob %d to pset", target->hdr_md_blob_id);
+    return false;
+  }
 
   return true;
 }
